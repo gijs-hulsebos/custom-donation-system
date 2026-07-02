@@ -38,6 +38,7 @@ interface DonationFormProps {
   solPrice: number;
   heliusUsed?: boolean;
   heliusError?: string;
+  priceSource?: string;
 }
 
 export default function DonationForm({
@@ -52,6 +53,7 @@ export default function DonationForm({
   solPrice = 140,
   heliusUsed = false,
   heliusError = "",
+  priceSource = "fallback",
 }: DonationFormProps) {
   // Checkout Steps:
   // 1: Contact, Message & Social handles
@@ -303,7 +305,7 @@ export default function DonationForm({
           </div>
 
           {/* Live Solana Exchange Rate (Helius vs. Fallback Status) */}
-          {heliusUsed ? (
+          {priceSource === "helius" ? (
             <div className="p-3 bg-emerald-500/5 border border-emerald-500/15 rounded-lg flex flex-col gap-1.5 text-xs font-mono">
               <div className="flex items-center justify-between">
                 <span className="flex items-center gap-1.5 text-slate-400">
@@ -313,18 +315,38 @@ export default function DonationForm({
                 <span className="font-bold text-emerald-400">${solPrice.toFixed(2)} USD</span>
               </div>
             </div>
+          ) : priceSource === "jupiter" ? (
+            <div className="p-3 bg-emerald-500/5 border border-emerald-500/15 rounded-lg flex flex-col gap-1.5 text-xs font-mono">
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-slate-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  SOL Price (Jupiter Live)
+                </span>
+                <span className="font-bold text-emerald-400">${solPrice.toFixed(2)} USD</span>
+              </div>
+            </div>
+          ) : priceSource === "coingecko" ? (
+            <div className="p-3 bg-emerald-500/5 border border-emerald-500/15 rounded-lg flex flex-col gap-1.5 text-xs font-mono">
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-slate-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  SOL Price (CoinGecko Live)
+                </span>
+                <span className="font-bold text-emerald-400">${solPrice.toFixed(2)} USD</span>
+              </div>
+            </div>
           ) : (
             <div className="p-3 bg-amber-500/5 border border-amber-500/15 rounded-lg flex flex-col gap-1.5 text-xs font-mono">
               <div className="flex items-center justify-between">
                 <span className="flex items-center gap-1.5 text-slate-400">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                  SOL Price (Jupiter Fallback)
+                  SOL Price (Estimated)
                 </span>
                 <span className="font-bold text-amber-400">${solPrice.toFixed(2)} USD</span>
               </div>
               <div className="text-[10px] text-amber-500/85 border-t border-amber-500/10 pt-1.5 leading-normal font-sans">
-                <span className="font-semibold block font-mono text-[9px] uppercase tracking-wider text-amber-400/95 mb-0.5">⚠️ Helius Connection Error</span>
-                {heliusError || "Helius API did not return a valid price response."}
+                <span className="font-semibold block font-mono text-[9px] uppercase tracking-wider text-amber-400/95 mb-0.5">⚠️ API Offline</span>
+                {heliusError || "Live price endpoints are currently offline."}
               </div>
             </div>
           )}

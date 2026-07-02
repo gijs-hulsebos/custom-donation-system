@@ -56,12 +56,14 @@ async function startServer() {
 
   // --- API ROUTES ---
 
-  // Live prices endpoint supporting Helius and Jupiter Fallback with detailed error logging
+  // Live prices endpoint supporting Helius, Jupiter, and CoinGecko with detailed error logging
   app.get("/api/prices", async (req, res) => {
     try {
       let solPrice = 140.0;
       let usdcPrice = 1.0;
       let usedHelius = false;
+      let usedJupiter = false;
+      let usedCoinGecko = false;
       let heliusError = "";
 
       const apiKey = process.env.HELIUS_API_KEY;
@@ -70,7 +72,7 @@ async function startServer() {
         heliusError = "HELIUS_API_KEY is missing/not configured in environment (.env).";
         console.warn(`[Prices API Warning] ${heliusError}`);
       } else {
-        // Attempt to fetch SOL price via Helius DAS getAsset RPC (preferred)
+        // Attempt to fetch SOL price via Helius DAS getAsset RPC (preferred if key is available)
         try {
           const response = await fetch(`https://mainnet.helius-rpc.com/?api-key=${apiKey}`, {
             method: "POST",
@@ -112,15 +114,42 @@ async function startServer() {
         }
       }
 
-      // Fallback: If Helius key is missing or failed, query CoinGecko Price API (highly accurate and stable)
+      // Fallback 1: Query Jupiter Price API v2 (extremely stable, no API key needed, free from rate-limiting)
       if (!usedHelius) {
         try {
+          console.log("[Prices Fallback] Querying Jupiter Price API v2...");
+          const response = await fetch("https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112,SOL");
+          if (response.ok) {
+            const jupData: any = await response.json();
+            const priceObj = jupData.data?.["So11111111111111111111111111111111111111112"] || jupData.data?.["SOL"];
+            const priceStr = priceObj?.price;
+            if (priceStr) {
+              const price = parseFloat(priceStr);
+              if (!isNaN(price) && price > 0) {
+                solPrice = price;
+                usedJupiter = true;
+                console.log(`[Jupiter Price API Success] Live SOL price: $${solPrice}`);
+              }
+            }
+          } else {
+            console.warn(`[Jupiter Price API Fallback] HTTP error: ${response.status}`);
+          }
+        } catch (err: any) {
+          console.error("[Jupiter Price API Fetch Error]:", err);
+        }
+      }
+
+      // Fallback 2: Query CoinGecko Price API
+      if (!usedHelius && !usedJupiter) {
+        try {
+          console.log("[Prices Fallback] Querying CoinGecko Simple Price API...");
           const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd");
           if (response.ok) {
             const cgData: any = await response.json();
             const price = cgData.solana?.usd;
             if (price && typeof price === "number") {
               solPrice = price;
+              usedCoinGecko = true;
               console.log(`[CoinGecko Price Fallback] Live SOL price: $${solPrice}`);
             } else {
               console.warn("[CoinGecko Price Fallback] Response data price field missing/invalid");
@@ -133,15 +162,22 @@ async function startServer() {
         }
       }
 
+      // Resolve the active source
+      let source = "fallback";
+      if (usedHelius) source = "helius";
+      else if (usedJupiter) source = "jupiter";
+      else if (usedCoinGecko) source = "coingecko";
+
       res.json({
         SOL: solPrice,
         USDC: usdcPrice,
+        source,
         heliusUsed: usedHelius,
         heliusError: heliusError || null,
       });
     } catch (error: any) {
       console.error("[Prices Endpoint Error]:", error);
-      res.json({ SOL: 140.0, USDC: 1.0, heliusUsed: false, heliusError: error.message });
+      res.json({ SOL: 140.0, USDC: 1.0, source: "fallback", heliusUsed: false, heliusError: error.message });
     }
   });
 

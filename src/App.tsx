@@ -14,6 +14,7 @@ export default function App() {
   const [solPrice, setSolPrice] = useState<number>(140.0);
   const [heliusUsed, setHeliusUsed] = useState<boolean>(false);
   const [heliusError, setHeliusError] = useState<string>("");
+  const [priceSource, setPriceSource] = useState<string>("fallback");
 
   // Payment challenge states managed via global interceptor
   const [challenge, setChallenge] = useState<PaymentRequirements | null>(null);
@@ -31,7 +32,8 @@ export default function App() {
           setSolPrice(data.SOL);
           setHeliusUsed(!!data.heliusUsed);
           setHeliusError(data.heliusError || "");
-          console.log("[Live Price Sync] Updated SOL price to:", data.SOL, "Helius:", data.heliusUsed, "Error:", data.heliusError);
+          setPriceSource(data.source || "fallback");
+          console.log("[Live Price Sync] Updated SOL price to:", data.SOL, "Source:", data.source, "Helius:", data.heliusUsed, "Error:", data.heliusError);
         }
       }
     } catch (err) {
@@ -203,6 +205,7 @@ export default function App() {
                 solPrice={solPrice}
                 heliusUsed={heliusUsed}
                 heliusError={heliusError}
+                priceSource={priceSource}
               />
             </motion.div>
           )}
