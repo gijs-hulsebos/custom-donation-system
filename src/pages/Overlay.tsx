@@ -45,6 +45,10 @@ export default function Overlay() {
     return () => clearInterval(interval);
   }, [seenIds]);
 
+  if (!activeAlert) {
+    return <div className="fixed inset-0 w-screen h-screen bg-transparent pointer-events-none" />;
+  }
+
   return (
     <div className="w-screen h-screen bg-transparent flex items-start justify-center pt-10 overflow-hidden font-mono select-none">
       <AnimatePresence>
@@ -54,7 +58,7 @@ export default function Overlay() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -20, scale: 0.95 }}
             transition={{ type: "spring", stiffness: 300, damping: 25 }}
-            className="w-[450px] bg-black/90 border-2 border-green-500 rounded-lg p-6 shadow-[0_0_25px_rgba(34,197,94,0.4)] text-green-400 text-center"
+            className="w-[450px] bg-black/90 border-2 border-green-500 rounded-lg p-6 shadow-[0_0_25px_rgba(34,197,94,0.4)] text-green-400 text-center pointer-events-auto"
           >
             {/* Headline Tag */}
             <div className="text-xs uppercase tracking-widest text-green-500/70 mb-3 animate-pulse">

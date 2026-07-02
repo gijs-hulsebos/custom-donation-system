@@ -2,8 +2,36 @@ import express from "express";
 import path from "path";
 import dotenv from "dotenv";
 import nacl from "tweetnacl";
-import bs58 from "bs58";
 import crypto from "crypto";
+
+const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+const ALPHABET_MAP: Record<string, number> = {};
+for (let i = 0; i < ALPHABET.length; i++) {
+  ALPHABET_MAP[ALPHABET[i]] = i;
+}
+
+function bs58Decode(string: string): Uint8Array {
+  if (string.length === 0) return new Uint8Array(0);
+  const bytes = [0];
+  for (let i = 0; i < string.length; i++) {
+    const c = string[i];
+    if (!(c in ALPHABET_MAP)) throw new Error('Non-base58 character');
+    let carry = ALPHABET_MAP[c];
+    for (let j = 0; j < bytes.length; j++) {
+      carry += bytes[j] * 58;
+      bytes[j] = carry & 0xff;
+      carry >>= 8;
+    }
+    while (carry > 0) {
+      bytes.push(carry & 0xff);
+      carry >>= 8;
+    }
+  }
+  for (let k = 0; string[k] === '1' && k < string.length - 1; k++) {
+    bytes.push(0);
+  }
+  return new Uint8Array(bytes.reverse());
+}
 
 // Load environment variables
 dotenv.config();
@@ -331,7 +359,7 @@ app.use(express.json());
 
       // Validate public key format
       try {
-        const decoded = bs58.decode(donorWallet);
+        const decoded = bs58Decode(donorWallet);
         if (decoded.length !== 32) {
           throw new Error("Invalid public key length");
         }
@@ -424,8 +452,8 @@ app.use(express.json());
       if (!verified) {
         console.log("[PayAI Fallback] Performing cryptographic verification on-chain fallback...");
         try {
-          const donorPubKeyBytes = bs58.decode(donorWallet);
-          const signatureBuffer = bs58.decode(signature);
+          const donorPubKeyBytes = bs58Decode(donorWallet);
+          const signatureBuffer = bs58Decode(signature);
           const messageBuffer = new TextEncoder().encode(pending.messageToSign);
 
           // Verify signature cryptographically using TweetNaCl
