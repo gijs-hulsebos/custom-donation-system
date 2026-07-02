@@ -70,7 +70,7 @@ async function startServer() {
       } else {
         // Attempt to fetch SOL price via Helius DAS getAsset RPC (preferred if key is available)
         try {
-          const response = await fetch(`https://mainnet.helius-rpc.com/?api-key=${apiKey}`, {
+          let response = await fetch(`https://mainnet.helius-rpc.com/?api-key=${apiKey}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -86,23 +86,46 @@ async function startServer() {
             })
           });
 
+          // Primary URL failed or returned error - try classic Helius RPC URL fallback
+          if (!response.ok) {
+            console.warn(`[Helius RPC] Primary domain failed (status: ${response.status}). Retrying with classic rpc.helius.xyz...`);
+            response = await fetch(`https://rpc.helius.xyz/?api-key=${apiKey}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: "get-sol-price",
+                method: "getAsset",
+                params: {
+                  id: "So11111111111111111111111111111111111111112",
+                  displayOptions: {
+                    showFungible: true
+                  }
+                }
+              })
+            });
+          }
+
           if (response.ok) {
             const result: any = await response.json();
             if (result.error) {
               heliusError = `getAsset RPC error: ${result.error.message || JSON.stringify(result.error)}`;
+              console.error(`[Helius RPC Error Details]:`, result.error);
             } else {
               const pricePerToken = result.result?.token_info?.price_info?.price_per_token;
               if (pricePerToken && typeof pricePerToken === "number") {
                 solPrice = pricePerToken;
                 usedHelius = true;
                 heliusError = ""; // Clear any errors since it worked perfectly
-                console.log(`[Helius RPC getAsset] Live SOL price: $${solPrice}`);
+                console.log(`[Helius RPC Success] Live SOL price: $${solPrice}`);
               } else {
                 heliusError = "getAsset RPC returned data but price_info.price_per_token was missing or null.";
+                console.warn(`[Helius Price Warning]:`, JSON.stringify(result.result?.token_info || result));
               }
             }
           } else {
             heliusError = `getAsset RPC HTTP error (status: ${response.status})`;
+            console.error(`[Helius RPC HTTP Error]:`, heliusError);
           }
         } catch (err: any) {
           heliusError = `getAsset RPC request failed: ${err.message || err}`;
@@ -546,7 +569,9 @@ async function startServer() {
 
       // A. Real Solana ledger scan using @solana/web3.js Connection
       try {
-        const rpcUrl = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+        const apiKey = process.env.HELIUS_API_KEY;
+        const rpcUrl = process.env.SOLANA_RPC_URL || 
+          (apiKey ? `https://mainnet.helius-rpc.com/?api-key=${apiKey}` : "https://api.mainnet-beta.solana.com");
         const connection = new Connection(rpcUrl, "confirmed");
         const pubKey = new PublicKey(RECEIVER_WALLET);
 

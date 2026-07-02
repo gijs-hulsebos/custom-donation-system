@@ -159,7 +159,13 @@ export default function DonationForm({
     
     addLog("Initiating Solana ledger verification handshake...");
     await new Promise((r) => setTimeout(r, 600));
-    addLog(`Connecting to Solana RPC node (api.mainnet-beta.solana.com)...`);
+    if (priceSource === "helius") {
+      addLog(`Connecting to Solana RPC node (Helius High-Performance Node)...`);
+    } else if (priceSource === "jupiter") {
+      addLog(`Connecting to Solana RPC node (Jupiter API Assisted Node)...`);
+    } else {
+      addLog(`Connecting to Solana RPC node (api.mainnet-beta.solana.com)...`);
+    }
     
     await new Promise((r) => setTimeout(r, 800));
     addLog(`Scanning receiver account AJCS2c4... history for matching transaction of ${amount} ${currency}.`);
