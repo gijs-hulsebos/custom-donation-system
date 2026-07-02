@@ -12,7 +12,7 @@ dotenv.config();
 // Fallback configuration values
 const DEFAULT_RECEIVER_WALLET = "AJCS2c4HqcfWbEU2R75iWkPFUk5WwjwbuPNA26o6CuMA"; // The NFT Cat donation fallback
 const RECEIVER_WALLET = process.env.RECEIVER_WALLET || DEFAULT_RECEIVER_WALLET;
-const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || "https://discord.com/api/webhooks/1522015745662521384/grEU_VLHBqRDudREOw4EpyKw9JZbBgvTojgBuFWcXicxz31MELxq7p_TGfyiBT4tQt91";
+const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || "";
 const PORT = 3000;
 
 // In-memory store for pending payments (mapped by paymentId)
@@ -46,11 +46,10 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
-async function startServer() {
-  const app = express();
-  app.use(express.json());
+const app = express();
+app.use(express.json());
 
-  // --- API ROUTES ---
+// --- API ROUTES ---
 
   // Live prices endpoint supporting Helius, Jupiter, and CoinGecko with detailed error logging
   app.get("/api/prices", async (req, res) => {
@@ -706,28 +705,34 @@ async function startServer() {
 
   // --- VITE MIDDLEWARE SETUP ---
 
-  if (process.env.NODE_ENV !== "production") {
-    // Development Mode: Mount Vite's HMR-disabled development server as middleware
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-    console.log("[Server] Embedded Vite middleware launched successfully.");
-  } else {
-    // Production Mode: Serve the pre-built files
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-    console.log("[Server] Production static server configured targeting 'dist/'.");
+  // Export the express app instance for Vercel's serverless handler
+  export default app;
+
+  // Only start standalone HTTP server if NOT running inside Vercel Serverless
+  if (!process.env.VERCEL) {
+    const startStandaloneServer = async () => {
+      if (process.env.NODE_ENV !== "production") {
+        // Development Mode: Mount Vite's HMR-disabled development server as middleware
+        const vite = await createViteServer({
+          server: { middlewareMode: true },
+          appType: "spa",
+        });
+        app.use(vite.middlewares);
+        console.log("[Server] Embedded Vite middleware launched successfully.");
+      } else {
+        // Production Mode: Serve the pre-built files
+        const distPath = path.join(process.cwd(), "dist");
+        app.use(express.static(distPath));
+        app.get("*", (req, res) => {
+          res.sendFile(path.join(distPath, "index.html"));
+        });
+        console.log("[Server] Production static server configured targeting 'dist/'.");
+      }
+
+      app.listen(PORT, "0.0.0.0", () => {
+        console.log(`[Server] Web application running live on http://localhost:${PORT}`);
+      });
+    };
+
+    startStandaloneServer();
   }
-
-  // Start listening
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[Server] Web application running live on http://localhost:${PORT}`);
-  });
-}
-
-startServer();
