@@ -1,6 +1,5 @@
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { PublicKey, Connection } from "@solana/web3.js";
 import nacl from "tweetnacl";
@@ -713,6 +712,7 @@ app.use(express.json());
     const startStandaloneServer = async () => {
       if (process.env.NODE_ENV !== "production") {
         // Development Mode: Mount Vite's HMR-disabled development server as middleware
+        const { createServer: createViteServer } = await import("vite");
         const vite = await createViteServer({
           server: { middlewareMode: true },
           appType: "spa",
