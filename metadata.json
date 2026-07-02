@@ -1,0 +1,6 @@
+{
+  "name": "The NFT Cat Donations",
+  "description": "A crypto-native playful donation portal for The NFT Cat project on Solana implementing the x402 payment protocol and PayAI facilitator integrations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
