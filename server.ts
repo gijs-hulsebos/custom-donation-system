@@ -20,6 +20,8 @@ const RECEIVER_WALLET = process.env.RECEIVER_WALLET || DEFAULT_RECEIVER_WALLET;
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || "";
 const PORT = 3000;
 
+let recentAlerts: any[] = [];
+
 // In-memory store for pending payments (mapped by paymentId)
 // This is used to verify signatures and preserve original metadata across retries
 interface PendingPayment {
@@ -40,6 +42,7 @@ interface PendingPayment {
 
 const pendingPayments = new Map<string, PendingPayment>();
 const usedSignatures = new Set<string>();
+const processedMatches = new Set<string>();
 
 // Cleanup expired payments (older than 15 minutes) every 5 minutes
 setInterval(() => {
@@ -561,6 +564,11 @@ app.use(express.json());
     }
   });
 
+  // Simple overlay feed endpoint for OBS overlay browser source
+  app.get("/api/overlay-feed", (req, res) => {
+    res.json(recentAlerts);
+  });
+
   // Manual payment verification route checking the Solana ledger via RPC with deterministic balance changes
   app.post("/api/verify-transfer", async (req, res) => {
     try {
@@ -605,29 +613,23 @@ app.use(express.json());
       console.log(`[RPC Monitor] Retrieved ${signatures.length} recent signatures from RPC.`);
 
       // Filter returned signatures array instantly:
-      // only look at transactions where the block time (blockTime) is greater than or equal to our checkoutTimestamp - 10
+      // tx.blockTime >= checkoutTimestamp - 10 AND !processedMatches.has(tx.signature)
       const validSignatures = signatures.filter((sig: any) => {
-        return sig.blockTime && (sig.blockTime >= (Number(checkoutTimestamp) - 10));
+        return sig.blockTime && 
+               (sig.blockTime >= (Number(checkoutTimestamp) - 10)) &&
+               !processedMatches.has(sig.signature);
       });
 
       console.log(`[RPC Monitor] Found ${validSignatures.length} signatures in the valid time window.`);
-
-      if (validSignatures.length === 0) {
-        return res.status(200).json({
-          success: false,
-          message: "No recent transactions found on-chain.",
-          error: "No recent transactions found on-chain."
-        });
-      }
 
       let verifiedSignature = "";
 
       for (const sigInfo of validSignatures) {
         const signature = sigInfo.signature;
 
-        // Idempotency check:
-        if (usedSignatures.has(signature)) {
-          console.log(`[RPC Monitor] Skipping signature ${signature} because it has already been verified/used.`);
+        // Double safety check
+        if (processedMatches.has(signature)) {
+          console.log(`[RPC Monitor] Skipping signature ${signature} because it has already been processed.`);
           continue;
         }
 
@@ -680,8 +682,8 @@ app.use(express.json());
                 if (actualLamportsReceived === expectedLamports) {
                   console.log(`[RPC Monitor] Found match! Tx Signature: ${tx.transaction.signatures[0]}`);
 
-                  // Save signature to usedSignatures for idempotency
-                  usedSignatures.add(signature);
+                  // Save signature to safety log immediately for idempotency
+                  processedMatches.add(signature);
                   verifiedSignature = signature;
                   break;
                 }
@@ -759,18 +761,28 @@ app.use(express.json());
           }
         }
 
-        return res.status(200).json({
+        // Push successful verify-transfer alerts to the overlay cache
+        recentAlerts.push({
+          id: Math.random().toString(36).substring(2),
+          amount: expectedAmountSol,
+          name: name || "Anonymous",
+          message: message || "",
+          socials: socials || "",
+          timestamp: Date.now()
+        });
+        if (recentAlerts.length > 10) recentAlerts.shift(); // Keep cache memory tiny
+
+        return res.json({
           success: true,
-          txHash: verifiedSignature,
+          message: "Payment verified successfully!",
           txId: verifiedSignature,
-          message: "Manual transfer successfully auto-detected on-chain!"
+          txHash: verifiedSignature
         });
       }
 
-      return res.status(200).json({
+      return res.json({
         success: false,
-        message: "Awaiting exact matching transfer amount...",
-        error: "Awaiting exact matching transfer amount..."
+        message: "Scanning ledger for matching transfer..."
       });
     } catch (err: any) {
       console.error("[Server Error] POST /api/verify-transfer failed:", err);
