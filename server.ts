@@ -3,9 +3,16 @@ import path from "path";
 import dotenv from "dotenv";
 import nacl from "tweetnacl";
 import bs58 from "bs58";
+import crypto from "crypto";
 
 // Load environment variables
 dotenv.config();
+
+function generateRandomId(length = 12): string {
+  return crypto.randomBytes(Math.ceil(length / 2))
+    .toString("hex") // Converts binary data to an alphanumeric hex string
+    .slice(0, length);
+}
 
 // Fallback configuration values
 const DEFAULT_RECEIVER_WALLET = "AJCS2c4HqcfWbEU2R75iWkPFUk5WwjwbuPNA26o6CuMA"; // The NFT Cat donation fallback
@@ -32,6 +39,7 @@ interface PendingPayment {
 }
 
 const pendingPayments = new Map<string, PendingPayment>();
+const usedSignatures = new Set<string>();
 
 // Cleanup expired payments (older than 15 minutes) every 5 minutes
 setInterval(() => {
@@ -254,7 +262,7 @@ app.use(express.json());
         }
 
         // Generate a unique payment identifier
-        const newPaymentId = `pay_${Math.random().toString(36).substring(2, 11)}${Date.now().toString(36)}`;
+        const newPaymentId = `pay_${generateRandomId(12)}`;
 
         // Message that the wallet is required to sign (stateless payment challenge format)
         const messageToSign = `The NFT Cat Donation: Authorize donation of ${parsedAmount} ${currency} to receiver ${RECEIVER_WALLET}. Reference ID: ${newPaymentId}`;
@@ -553,26 +561,25 @@ app.use(express.json());
     }
   });
 
-  // Manual payment verification route checking the Solana ledger via RPC
-  app.post("/api/verify-manual", async (req, res) => {
+  // Manual payment verification route checking the Solana ledger via RPC with deterministic balance changes
+  app.post("/api/verify-transfer", async (req, res) => {
     try {
-      const { amount, currency, name, socials, message, memo, donorWallet, simulate } = req.body;
+      const { expectedAmountSol, checkoutTimestamp, name, socials, message, simulate } = req.body;
 
-      if (!memo) {
-        return res.status(400).json({ error: "Tracking memo string is required." });
+      if (!expectedAmountSol || !checkoutTimestamp) {
+        return res.status(400).json({ error: "expectedAmountSol and checkoutTimestamp are required parameters." });
       }
 
-      console.log(`[Ledger Monitor] RPC checking Solana ledger for address ${RECEIVER_WALLET} looking for memo: "${memo}"`);
+      console.log(`[RPC Monitor] Scanning txs after timestamp: ${checkoutTimestamp}`);
 
       let verified = false;
       let txId = "";
 
-      // A. Real Solana ledger scan using native fetch JSON-RPC
-      try {
-        const apiKey = process.env.HELIUS_API_KEY;
-        const rpcUrl = process.env.SOLANA_RPC_URL || 
-          (apiKey ? `https://mainnet.helius-rpc.com/?api-key=${apiKey}` : "https://api.mainnet-beta.solana.com");
+      const apiKey = process.env.HELIUS_API_KEY;
+      const rpcUrl = process.env.SOLANA_RPC_URL || 
+        (apiKey ? `https://mainnet.helius-rpc.com/?api-key=${apiKey}` : "https://api.mainnet-beta.solana.com");
 
+      try {
         const signaturesRes = await fetch(rpcUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -583,7 +590,7 @@ app.use(express.json());
             params: [
               RECEIVER_WALLET,
               {
-                limit: 15,
+                limit: 20,
                 commitment: "confirmed"
               }
             ]
@@ -591,32 +598,39 @@ app.use(express.json());
         });
 
         if (signaturesRes.ok) {
-          const sigsResult: any = await signaturesRes.ok ? await signaturesRes.json() : {};
+          const sigsResult: any = await signaturesRes.json();
           const signatures = sigsResult.result || [];
-          console.log(`[Ledger Monitor] Retrieved ${signatures.length} recent signatures from RPC.`);
+          console.log(`[RPC Monitor] Retrieved ${signatures.length} recent signatures from RPC.`);
 
-          for (const sigInfo of signatures) {
-            // Check if the memo field in signature info contains our tracking memo
-            if (sigInfo.memo && sigInfo.memo.includes(memo)) {
-              console.log(`[Ledger Monitor] Match found in signature memo! ${sigInfo.signature}`);
-              verified = true;
-              txId = sigInfo.signature;
-              break;
+          // Filter returned signatures array instantly:
+          // only look at transactions where the block time (blockTime) is greater than or equal to our checkoutTimestamp 
+          // (with a small 30-second buffer to handle network clock drift).
+          const validSignatures = signatures.filter((sig: any) => {
+            return sig.blockTime && (sig.blockTime >= (Number(checkoutTimestamp) - 30));
+          });
+
+          console.log(`[RPC Monitor] Found ${validSignatures.length} signatures in the valid time window.`);
+
+          for (const sigInfo of validSignatures) {
+            // Idempotency check:
+            if (usedSignatures.has(sigInfo.signature)) {
+              console.log(`[RPC Monitor] Skipping signature ${sigInfo.signature} because it has already been verified/used.`);
+              continue;
             }
 
-            // Alternatively, retrieve the transaction logs to search for the tracking memo
+            // Pull the full transaction detail using getTransaction with jsonParsed encoding
             try {
               const txRes = await fetch(rpcUrl, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   jsonrpc: "2.0",
-                  id: "get-tx",
+                  id: "get-tx-parsed",
                   method: "getTransaction",
                   params: [
                     sigInfo.signature,
                     {
-                      encoding: "json",
+                      encoding: "jsonParsed",
                       maxSupportedTransactionVersion: 0,
                       commitment: "confirmed"
                     }
@@ -627,34 +641,60 @@ app.use(express.json());
               if (txRes.ok) {
                 const txData: any = await txRes.json();
                 const tx = txData.result;
-                if (tx && tx.meta && tx.meta.logMessages) {
-                  const logsString = tx.meta.logMessages.join("\n");
-                  if (logsString.includes(memo)) {
-                    console.log(`[Ledger Monitor] Match found in transaction logs! ${sigInfo.signature}`);
-                    verified = true;
-                    txId = sigInfo.signature;
-                    break;
+
+                if (tx && tx.meta && tx.meta.err === null) {
+                  // Find RECEIVER_WALLET account index in message.accountKeys
+                  const accountKeys = tx.transaction.message.accountKeys;
+                  let receiverIndex = -1;
+
+                  for (let i = 0; i < accountKeys.length; i++) {
+                    const keyObj = accountKeys[i];
+                    const pubkey = typeof keyObj === "string" ? keyObj : keyObj.pubkey;
+                    if (pubkey === RECEIVER_WALLET) {
+                      receiverIndex = i;
+                      break;
+                    }
+                  }
+
+                  if (receiverIndex !== -1 && tx.meta.postBalances && tx.meta.preBalances) {
+                    const postBalance = tx.meta.postBalances[receiverIndex];
+                    const preBalance = tx.meta.preBalances[receiverIndex];
+                    const netIncrease = postBalance - preBalance;
+
+                    // Convert expectedAmountSol to Lamports
+                    const expectedLamports = Math.round(Number(expectedAmountSol) * 1_000_000_000);
+
+                    if (netIncrease === expectedLamports) {
+                      console.log(`[RPC Monitor] Found match! Tx Signature: ${tx.transaction.signatures[0]}`);
+                      
+                      // Save signature to usedSignatures for idempotency
+                      usedSignatures.add(sigInfo.signature);
+
+                      verified = true;
+                      txId = sigInfo.signature;
+                      break;
+                    }
                   }
                 }
               }
-            } catch (txErr) {
-              // Silently continue for un-retrievable transactions
+            } catch (txErr: any) {
+              console.error(`[RPC Monitor] Error fetching/parsing transaction ${sigInfo.signature}:`, txErr.message || txErr);
             }
           }
         }
       } catch (rpcErr: any) {
-        console.warn(`[Ledger Monitor] RPC ledger lookup failed or rate-limited: ${rpcErr.message || rpcErr}`);
+        console.warn(`[RPC Monitor] RPC ledger lookup failed or rate-limited: ${rpcErr.message || rpcErr}`);
       }
 
-      // B. High-Fidelity Simulator fallback for local testing / sandbox mode
+      // Simulator fallback for development or local playground testing (if requested/enabled)
       if (!verified && (simulate || process.env.NODE_ENV !== "production" || !process.env.SOLANA_RPC_URL)) {
-        console.log(`[Ledger Monitor Simulator] Simulating blockchain match for tracking string: "${memo}"`);
+        console.log(`[RPC Monitor Simulator] Simulating blockchain match for expectedAmountSol: ${expectedAmountSol}`);
         verified = true;
         txId = "sim_tx_" + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
       }
 
       if (verified) {
-        // Trigger Discord notification
+        // Trigger Discord Notification if webhook is configured
         if (DISCORD_WEBHOOK_URL) {
           try {
             const donorName = name || "Anonymous Manual Backer";
@@ -673,7 +713,7 @@ app.use(express.json());
                 {
                   title: "🎉 New Manual Donation Verified! 🐈",
                   description: `A backer (**${donorName}**) has successfully sent a manual transfer, auto-detected on-chain! 🐾`,
-                  color: 0x3b82f6, // Bright blue for manual transfers
+                  color: 0x3b82f6,
                   fields: [
                     {
                       name: "👤 Donor Name",
@@ -682,13 +722,8 @@ app.use(express.json());
                     },
                     {
                       name: "💰 Donation Amount",
-                      value: `**${amount} ${currency}**`,
+                      value: `**${expectedAmountSol} SOL**`,
                       inline: true,
-                    },
-                    {
-                      name: "🔑 Memo Tracking String",
-                      value: `\`${memo}\``,
-                      inline: false,
                     },
                     {
                       name: "📱 Social Handles",
@@ -732,10 +767,10 @@ app.use(express.json());
       }
 
       return res.status(404).json({
-        error: "No matching transaction with your tracking string has been spotted in the ledger history yet.",
+        error: "No matching transaction matching your amount has been spotted in the ledger history yet.",
       });
     } catch (err: any) {
-      console.error("[Server Error] POST /api/verify-manual failed:", err);
+      console.error("[Server Error] POST /api/verify-transfer failed:", err);
       res.status(500).json({ error: err.message || "An unknown server error occurred." });
     }
   });

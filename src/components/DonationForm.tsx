@@ -26,6 +26,12 @@ import { WalletState, DonationPayload } from "../types";
 
 const DEPOSIT_ADDRESS = "AJCS2c4HqcfWbEU2R75iWkPFUk5WwjwbuPNA26o6CuMA";
 
+function generateFrontendId(length = 12): string {
+  const array = new Uint8Array(Math.ceil(length / 2));
+  window.crypto.getRandomValues(array);
+  return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('').slice(0, length);
+}
+
 interface DonationFormProps {
   walletState: WalletState;
   onWalletChange: (state: WalletState) => void;
@@ -80,7 +86,7 @@ export default function DonationForm({
   const [validationError, setValidationError] = useState<string | null>(null);
 
   // Payment Selector & Manual Direct Transfer
-  const [paymentMethod, setPaymentMethod] = useState<"x402" | "manual">("x402");
+  const [paymentMethod, setPaymentMethod] = useState<"x402" | "manual">("manual");
   const [manualMemo, setManualMemo] = useState<string>("");
   const [copiedAddress, setCopiedAddress] = useState(false);
   const [copiedAmount, setCopiedAmount] = useState(false);
@@ -91,6 +97,7 @@ export default function DonationForm({
   const [manualError, setManualError] = useState<string | null>(null);
   const [localCompleted, setLocalCompleted] = useState(false);
   const [simulationEligible, setSimulationEligible] = useState(false);
+  const [checkoutTimestamp, setCheckoutTimestamp] = useState<number | null>(null);
 
   // Clear validation error on change
   useEffect(() => {
@@ -100,7 +107,7 @@ export default function DonationForm({
   // Generate unique memo once step 2 is active
   useEffect(() => {
     if (checkoutStep === 2 && !manualMemo) {
-      const randomHex = Math.random().toString(36).substring(2, 8).toUpperCase();
+      const randomHex = generateFrontendId(6).toUpperCase();
       setManualMemo(`CAT-DONATE-${randomHex}`);
     }
   }, [checkoutStep, manualMemo]);
@@ -168,15 +175,16 @@ export default function DonationForm({
     }
     
     await new Promise((r) => setTimeout(r, 800));
-    addLog(`Scanning receiver account AJCS2c4... history for matching transaction of ${amount} ${currency}.`);
+    addLog(`Scanning receiver account AJCS2c4... history for matching SOL transaction of ${amount} SOL.`);
     
     await new Promise((r) => setTimeout(r, 900));
-    addLog(`Running ledger verification loop...`);
+    addLog(`Running deterministic ledger verification loop (time window match)...`);
 
     try {
+      const currentTimestamp = checkoutTimestamp || Math.floor(Date.now() / 1000);
       const payload = {
-        amount: parseFloat(amount),
-        currency,
+        expectedAmountSol: parseFloat(amount),
+        checkoutTimestamp: currentTimestamp,
         name: name.trim() || undefined,
         socials: (discord.trim() || twitter.trim() || telegram.trim()) ? {
           discord: discord.trim() || undefined,
@@ -184,11 +192,10 @@ export default function DonationForm({
           telegram: telegram.trim() || undefined,
         } : undefined,
         message: message.trim() || undefined,
-        memo: manualMemo,
         simulate,
       };
 
-      const res = await fetch("/api/verify-manual", {
+      const res = await fetch("/api/verify-transfer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -205,7 +212,7 @@ export default function DonationForm({
         setLocalCompleted(true);
       } else {
         addLog(`WARNING: No matching ledger record has been spotted yet.`);
-        addLog(`Ensure you sent exactly ${amount} ${currency} to ${DEPOSIT_ADDRESS.substring(0, 6)}...`);
+        addLog(`Ensure you sent exactly ${amount} SOL to ${DEPOSIT_ADDRESS.substring(0, 6)}...`);
         setManualError(data.error || "No matching transaction found.");
         setManualVerifying(false);
         setSimulationEligible(true);
@@ -222,6 +229,7 @@ export default function DonationForm({
     e.preventDefault();
     if (checkoutStep === 1) {
       setCheckoutStep(2);
+      setCheckoutTimestamp(Math.floor(Date.now() / 1000));
       return;
     }
 
@@ -275,9 +283,10 @@ export default function DonationForm({
     setTwitter("");
     setTelegram("");
     setMessage("");
-    setPaymentMethod("x402");
+    setPaymentMethod("manual");
     setManualMemo("");
     setLocalCompleted(false);
+    setCheckoutTimestamp(null);
     setManualLogs([]);
     setManualError(null);
     setSimulationEligible(false);
@@ -651,27 +660,21 @@ export default function DonationForm({
                   <div className="space-y-3 pt-3 border-t border-slate-800/60">
                     <label className="text-xs font-semibold text-slate-300 block">Select Settlement Pathway</label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {/* Option A: x402 Protocol */}
-                      <button
-                        type="button"
-                        onClick={() => setPaymentMethod("x402")}
-                        className={`p-4 rounded-xl text-left border transition-all cursor-pointer flex flex-col justify-between h-full relative ${
-                          paymentMethod === "x402"
-                            ? "bg-blue-600/5 border-blue-500 text-slate-100 shadow-[0_0_15px_rgba(59,130,246,0.08)]"
-                            : "bg-[#0a0c12] border-slate-800/80 hover:border-slate-700 text-slate-400"
-                        }`}
+                      {/* Option A: x402 Protocol (Locked / Coming Soon) */}
+                      <div
+                        className="p-4 rounded-xl text-left border border-slate-900 bg-slate-950/40 opacity-60 flex flex-col justify-between h-full relative cursor-not-allowed select-none"
                       >
                         <div className="flex items-center justify-between mb-1">
                           <div className="flex items-center gap-1.5">
-                            <span className="text-xs font-bold font-mono text-slate-100">Pay via x402 Protocol</span>
-                            <span className="bg-blue-500/10 text-blue-400 text-[8px] px-1 py-0.5 rounded font-mono border border-blue-500/20 uppercase font-black tracking-wider shrink-0">Gas Free</span>
+                            <span className="text-xs font-bold font-mono text-slate-400">Pay via x402 Protocol</span>
+                            <span className="bg-amber-500/10 text-amber-500 text-[8px] px-1 py-0.5 rounded font-mono border border-amber-500/20 uppercase font-black tracking-wider shrink-0 font-extrabold">Coming Soon</span>
                           </div>
-                          <span className={`w-2 h-2 rounded-full ${paymentMethod === "x402" ? "bg-blue-500 animate-pulse" : "bg-slate-700"}`} />
+                          <span className="w-2 h-2 rounded-full bg-slate-800" />
                         </div>
-                        <span className="text-[10px] text-slate-400 font-sans leading-relaxed">
+                        <span className="text-[10px] text-slate-500 font-sans leading-relaxed">
                           Gas-free, stateless, instant, zero account creation. Sign with an active browser wallet handshake.
                         </span>
-                      </button>
+                      </div>
 
                       {/* Option B: Manual Direct Transfer */}
                       <button
@@ -758,6 +761,8 @@ export default function DonationForm({
                             </button>
                           </div>
                         </div>
+
+
                       </div>
 
                       {/* Terminal logs monitor frame */}
