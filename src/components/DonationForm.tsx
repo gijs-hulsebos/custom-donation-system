@@ -876,7 +876,7 @@ export default function DonationForm({
                   ) : (
                     <>
                       <Terminal size={14} />
-                      <span>Verify Ledger Settlement</span>
+                      <span>Verify Donation</span>
                     </>
                   )}
                 </button>
