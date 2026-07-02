@@ -569,6 +569,20 @@ app.use(express.json());
     res.json(recentAlerts);
   });
 
+  // Simple endpoint to trigger a test alert
+  app.post("/api/test-alert", (req, res) => {
+    recentAlerts.push({
+      id: 'alert-' + Math.random().toString(36).substring(2, 11),
+      name: req.body.name || 'Anonymous',
+      amount: `${req.body.expectedAmountSol || 0.025} $SOL`,
+      message: req.body.message || '',
+      socials: req.body.socials || '',
+      timestamp: Date.now()
+    });
+    if (recentAlerts.length > 10) recentAlerts.shift();
+    return res.json({ success: true, message: "Test alert triggered!" });
+  });
+
   // Manual payment verification route checking the Solana ledger via RPC with deterministic balance changes
   app.post("/api/verify-transfer", async (req, res) => {
     try {
@@ -763,14 +777,14 @@ app.use(express.json());
 
         // Push successful verify-transfer alerts to the overlay cache
         recentAlerts.push({
-          id: Math.random().toString(36).substring(2),
-          amount: expectedAmountSol,
-          name: name || "Anonymous",
-          message: message || "",
-          socials: socials || "",
+          id: 'alert-' + Math.random().toString(36).substring(2, 11),
+          name: req.body.name || 'Anonymous',
+          amount: `${req.body.expectedAmountSol || 0.025} $SOL`,
+          message: req.body.message || '',
+          socials: req.body.socials || '',
           timestamp: Date.now()
         });
-        if (recentAlerts.length > 10) recentAlerts.shift(); // Keep cache memory tiny
+        if (recentAlerts.length > 10) recentAlerts.shift();
 
         return res.json({
           success: true,
