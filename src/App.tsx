@@ -5,20 +5,8 @@ import DonationForm from "./components/DonationForm";
 import PaymentChallengePortal from "./components/PaymentChallengePortal";
 import { registerChallengeHandler, securedFetch } from "./utils/api";
 import { ShieldCheck, Heart, ArrowRight } from "lucide-react";
-import Overlay from "./pages/Overlay";
 
 export default function App() {
-  const [isOverlay, setIsOverlay] = useState<boolean>(false);
-
-  useEffect(() => {
-    setIsOverlay(window.location.pathname === "/overlay");
-    const handleLocationChange = () => {
-      setIsOverlay(window.location.pathname === "/overlay");
-    };
-    window.addEventListener("popstate", handleLocationChange);
-    return () => window.removeEventListener("popstate", handleLocationChange);
-  }, []);
-
   // Navigation states: "landing" | "checkout"
   const [view, setView] = useState<"landing" | "checkout">("landing");
 
@@ -120,10 +108,6 @@ export default function App() {
     setLoadingStage("idle");
     setErrorMessage(null);
   };
-
-  if (isOverlay) {
-    return <Overlay />;
-  }
 
   return (
     <div className="min-h-screen bg-[#07090e] text-slate-100 flex flex-col justify-between font-sans selection:bg-blue-600 selection:text-white">

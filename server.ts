@@ -2,36 +2,8 @@ import express from "express";
 import path from "path";
 import dotenv from "dotenv";
 import nacl from "tweetnacl";
+import bs58 from "bs58";
 import crypto from "crypto";
-
-const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-const ALPHABET_MAP: Record<string, number> = {};
-for (let i = 0; i < ALPHABET.length; i++) {
-  ALPHABET_MAP[ALPHABET[i]] = i;
-}
-
-function bs58Decode(string: string): Uint8Array {
-  if (string.length === 0) return new Uint8Array(0);
-  const bytes = [0];
-  for (let i = 0; i < string.length; i++) {
-    const c = string[i];
-    if (!(c in ALPHABET_MAP)) throw new Error('Non-base58 character');
-    let carry = ALPHABET_MAP[c];
-    for (let j = 0; j < bytes.length; j++) {
-      carry += bytes[j] * 58;
-      bytes[j] = carry & 0xff;
-      carry >>= 8;
-    }
-    while (carry > 0) {
-      bytes.push(carry & 0xff);
-      carry >>= 8;
-    }
-  }
-  for (let k = 0; string[k] === '1' && k < string.length - 1; k++) {
-    bytes.push(0);
-  }
-  return new Uint8Array(bytes.reverse());
-}
 
 // Load environment variables
 dotenv.config();
@@ -47,8 +19,6 @@ const DEFAULT_RECEIVER_WALLET = "AJCS2c4HqcfWbEU2R75iWkPFUk5WwjwbuPNA26o6CuMA"; 
 const RECEIVER_WALLET = process.env.RECEIVER_WALLET || DEFAULT_RECEIVER_WALLET;
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || "";
 const PORT = 3000;
-
-let recentAlerts: any[] = [];
 
 // In-memory store for pending payments (mapped by paymentId)
 // This is used to verify signatures and preserve original metadata across retries
@@ -70,7 +40,6 @@ interface PendingPayment {
 
 const pendingPayments = new Map<string, PendingPayment>();
 const usedSignatures = new Set<string>();
-const processedMatches = new Set<string>();
 
 // Cleanup expired payments (older than 15 minutes) every 5 minutes
 setInterval(() => {
@@ -86,18 +55,14 @@ setInterval(() => {
 const app = express();
 app.use(express.json());
 
-// Dynamic pricing cache to guarantee that fallback states never drop back to stale hardcoded 140.0
-let cachedSolPrice = 80.15;
-
 // --- API ROUTES ---
 
-  // Live prices endpoint supporting Helius, Coinbase, Jupiter, and CoinGecko with detailed error logging
+  // Live prices endpoint supporting Helius, Jupiter, and CoinGecko with detailed error logging
   app.get("/api/prices", async (req, res) => {
     try {
-      let solPrice = cachedSolPrice;
+      let solPrice = 140.0;
       let usdcPrice = 1.0;
       let usedHelius = false;
-      let usedCoinbase = false;
       let usedJupiter = false;
       let usedCoinGecko = false;
       let heliusError = "";
@@ -153,9 +118,8 @@ let cachedSolPrice = 80.15;
               console.error(`[Helius RPC Error Details]:`, result.error);
             } else {
               const pricePerToken = result.result?.token_info?.price_info?.price_per_token;
-              if (pricePerToken && typeof pricePerToken === "number" && pricePerToken > 0) {
+              if (pricePerToken && typeof pricePerToken === "number") {
                 solPrice = pricePerToken;
-                cachedSolPrice = pricePerToken;
                 usedHelius = true;
                 heliusError = ""; // Clear any errors since it worked perfectly
                 console.log(`[Helius RPC Success] Live SOL price: $${solPrice}`);
@@ -174,33 +138,33 @@ let cachedSolPrice = 80.15;
         }
       }
 
-      // Fallback 1: Query Coinbase Spot Price API (extremely stable, no API key needed, never rate-limits Cloud Run, resolves instantly)
+      // Fallback 1: Query Jupiter Price API v2 (extremely stable, no API key needed, free from rate-limiting)
       if (!usedHelius) {
         try {
-          console.log("[Prices Fallback] Querying Coinbase Spot Price API...");
-          const response = await fetch("https://api.coinbase.com/v2/prices/SOL-USD/spot");
+          console.log("[Prices Fallback] Querying Jupiter Price API v2...");
+          const response = await fetch("https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112,SOL");
           if (response.ok) {
-            const cbData: any = await response.json();
-            const priceStr = cbData.data?.amount;
+            const jupData: any = await response.json();
+            const priceObj = jupData.data?.["So11111111111111111111111111111111111111112"] || jupData.data?.["SOL"];
+            const priceStr = priceObj?.price;
             if (priceStr) {
               const price = parseFloat(priceStr);
               if (!isNaN(price) && price > 0) {
                 solPrice = price;
-                cachedSolPrice = price;
-                usedCoinbase = true;
-                console.log(`[Coinbase Price API Success] Live SOL price: $${solPrice}`);
+                usedJupiter = true;
+                console.log(`[Jupiter Price API Success] Live SOL price: $${solPrice}`);
               }
             }
           } else {
-            console.warn(`[Coinbase Price API Fallback] HTTP error: ${response.status}`);
+            console.warn(`[Jupiter Price API Fallback] HTTP error: ${response.status}`);
           }
         } catch (err: any) {
-          console.error("[Coinbase Price API Fetch Error]:", err);
+          console.error("[Jupiter Price API Fetch Error]:", err);
         }
       }
 
       // Fallback 2: Query CoinGecko Price API
-      if (!usedHelius && !usedCoinbase) {
+      if (!usedHelius && !usedJupiter) {
         try {
           console.log("[Prices Fallback] Querying CoinGecko Simple Price API...");
           const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd");
@@ -209,7 +173,6 @@ let cachedSolPrice = 80.15;
             const price = cgData.solana?.usd;
             if (price && typeof price === "number") {
               solPrice = price;
-              cachedSolPrice = price;
               usedCoinGecko = true;
               console.log(`[CoinGecko Price Fallback] Live SOL price: $${solPrice}`);
             } else {
@@ -223,38 +186,11 @@ let cachedSolPrice = 80.15;
         }
       }
 
-      // Fallback 3: Query Jupiter Price API v2 (extremely stable, no API key needed, free from rate-limiting)
-      if (!usedHelius && !usedCoinbase && !usedCoinGecko) {
-        try {
-          console.log("[Prices Fallback] Querying Jupiter Price API v2...");
-          const response = await fetch("https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112,SOL");
-          if (response.ok) {
-            const jupData: any = await response.json();
-            const priceObj = jupData.data?.["So11111111111111111111111111111111111111112"] || jupData.data?.["SOL"];
-            const priceStr = priceObj?.price;
-            if (priceStr) {
-              const price = parseFloat(priceStr);
-              if (!isNaN(price) && price > 0) {
-                solPrice = price;
-                cachedSolPrice = price;
-                usedJupiter = true;
-                console.log(`[Jupiter Price API Success] Live SOL price: $${solPrice}`);
-              }
-            }
-          } else {
-            console.warn(`[Jupiter Price API Fallback] HTTP error: ${response.status}`);
-          }
-        } catch (err: any) {
-          console.error("[Jupiter Price API Fetch Error]:", err);
-        }
-      }
-
       // Resolve the active source
       let source = "fallback";
       if (usedHelius) source = "helius";
-      else if (usedCoinbase) source = "coinbase";
-      else if (usedCoinGecko) source = "coingecko";
       else if (usedJupiter) source = "jupiter";
+      else if (usedCoinGecko) source = "coingecko";
 
       res.json({
         SOL: solPrice,
@@ -264,12 +200,8 @@ let cachedSolPrice = 80.15;
         heliusError: heliusError || null,
       });
     } catch (error: any) {
-      console.error("CRITICAL PRICE FETCH ERROR:", error.message || error);
-      return res.status(500).json({ 
-        success: false, 
-        error: error.message || "Unknown pricing server error",
-        hint: process.env.HELIUS_API_KEY ? "Key is set" : "HELIUS_API_KEY IS MISSING IN VERCEL" 
-      });
+      console.error("[Prices Endpoint Error]:", error);
+      res.json({ SOL: 140.0, USDC: 1.0, source: "fallback", heliusUsed: false, heliusError: error.message });
     }
   });
 
@@ -396,7 +328,7 @@ let cachedSolPrice = 80.15;
 
       // Validate public key format
       try {
-        const decoded = bs58Decode(donorWallet);
+        const decoded = bs58.decode(donorWallet);
         if (decoded.length !== 32) {
           throw new Error("Invalid public key length");
         }
@@ -489,8 +421,8 @@ let cachedSolPrice = 80.15;
       if (!verified) {
         console.log("[PayAI Fallback] Performing cryptographic verification on-chain fallback...");
         try {
-          const donorPubKeyBytes = bs58Decode(donorWallet);
-          const signatureBuffer = bs58Decode(signature);
+          const donorPubKeyBytes = bs58.decode(donorWallet);
+          const signatureBuffer = bs58.decode(signature);
           const messageBuffer = new TextEncoder().encode(pending.messageToSign);
 
           // Verify signature cryptographically using TweetNaCl
@@ -613,30 +545,6 @@ let cachedSolPrice = 80.15;
           });
         }
 
-        let socialsString = "";
-        const s = pending?.socials || req.body.socials;
-        if (s) {
-          if (typeof s === "string") {
-            socialsString = s;
-          } else {
-            const parts = [];
-            if (s.twitter) parts.push(`@${s.twitter.replace("@", "")}`);
-            if (s.discord) parts.push(`Discord: ${s.discord}`);
-            if (s.telegram) parts.push(`TG: @${s.telegram.replace("@", "")}`);
-            socialsString = parts.join(" | ");
-          }
-        }
-
-        recentAlerts.push({
-          id: 'alert-' + Math.random().toString(36).substring(2, 11),
-          name: req.body.name || pending?.name || 'Anonymous',
-          amount: `${req.body.amount || pending?.amount || '0.025'} $${req.body.token || req.body.currency || pending?.currency || 'SOL'}`,
-          message: req.body.message || pending?.message || '',
-          socials: socialsString,
-          timestamp: Date.now()
-        });
-        if (recentAlerts.length > 10) recentAlerts.shift();
-
         res.json({
           success: true,
           message: "Donation successfully verified and settled! Thank you, kind cat-friend! 🐈",
@@ -651,25 +559,6 @@ let cachedSolPrice = 80.15;
       console.error("[Server Error] POST /api/donate failed:", error);
       res.status(500).json({ error: error.message || "An unknown server error occurred." });
     }
-  });
-
-  // Simple overlay feed endpoint for OBS overlay browser source
-  app.get("/api/overlay-feed", (req, res) => {
-    res.json(recentAlerts);
-  });
-
-  // Simple endpoint to trigger a test alert
-  app.post("/api/test-alert", (req, res) => {
-    recentAlerts.push({
-      id: 'alert-' + Math.random().toString(36).substring(2, 11),
-      name: req.body.name || 'Anonymous',
-      amount: `${req.body.expectedAmountSol || 0.025} $SOL`,
-      message: req.body.message || '',
-      socials: req.body.socials || '',
-      timestamp: Date.now()
-    });
-    if (recentAlerts.length > 10) recentAlerts.shift();
-    return res.json({ success: true, message: "Test alert triggered!" });
   });
 
   // Manual payment verification route checking the Solana ledger via RPC with deterministic balance changes
@@ -716,23 +605,29 @@ let cachedSolPrice = 80.15;
       console.log(`[RPC Monitor] Retrieved ${signatures.length} recent signatures from RPC.`);
 
       // Filter returned signatures array instantly:
-      // tx.blockTime >= checkoutTimestamp - 10 AND !processedMatches.has(tx.signature)
+      // only look at transactions where the block time (blockTime) is greater than or equal to our checkoutTimestamp - 10
       const validSignatures = signatures.filter((sig: any) => {
-        return sig.blockTime && 
-               (sig.blockTime >= (Number(checkoutTimestamp) - 10)) &&
-               !processedMatches.has(sig.signature);
+        return sig.blockTime && (sig.blockTime >= (Number(checkoutTimestamp) - 10));
       });
 
       console.log(`[RPC Monitor] Found ${validSignatures.length} signatures in the valid time window.`);
+
+      if (validSignatures.length === 0) {
+        return res.status(200).json({
+          success: false,
+          message: "No recent transactions found on-chain.",
+          error: "No recent transactions found on-chain."
+        });
+      }
 
       let verifiedSignature = "";
 
       for (const sigInfo of validSignatures) {
         const signature = sigInfo.signature;
 
-        // Double safety check
-        if (processedMatches.has(signature)) {
-          console.log(`[RPC Monitor] Skipping signature ${signature} because it has already been processed.`);
+        // Idempotency check:
+        if (usedSignatures.has(signature)) {
+          console.log(`[RPC Monitor] Skipping signature ${signature} because it has already been verified/used.`);
           continue;
         }
 
@@ -785,8 +680,8 @@ let cachedSolPrice = 80.15;
                 if (actualLamportsReceived === expectedLamports) {
                   console.log(`[RPC Monitor] Found match! Tx Signature: ${tx.transaction.signatures[0]}`);
 
-                  // Save signature to safety log immediately for idempotency
-                  processedMatches.add(signature);
+                  // Save signature to usedSignatures for idempotency
+                  usedSignatures.add(signature);
                   verifiedSignature = signature;
                   break;
                 }
@@ -864,42 +759,18 @@ let cachedSolPrice = 80.15;
           }
         }
 
-        // Push successful verify-transfer alerts to the overlay cache
-        let socialsString = "";
-        const s = req.body.socials;
-        if (s) {
-          if (typeof s === "string") {
-            socialsString = s;
-          } else {
-            const parts = [];
-            if (s.twitter) parts.push(`@${s.twitter.replace("@", "")}`);
-            if (s.discord) parts.push(`Discord: ${s.discord}`);
-            if (s.telegram) parts.push(`TG: @${s.telegram.replace("@", "")}`);
-            socialsString = parts.join(" | ");
-          }
-        }
-
-        recentAlerts.push({
-          id: 'alert-' + Math.random().toString(36).substring(2, 11),
-          name: req.body.name || 'Anonymous',
-          amount: `${req.body.expectedAmountSol || 0.025} $SOL`,
-          message: req.body.message || '',
-          socials: socialsString,
-          timestamp: Date.now()
-        });
-        if (recentAlerts.length > 10) recentAlerts.shift();
-
-        return res.json({
+        return res.status(200).json({
           success: true,
-          message: "Payment verified successfully!",
+          txHash: verifiedSignature,
           txId: verifiedSignature,
-          txHash: verifiedSignature
+          message: "Manual transfer successfully auto-detected on-chain!"
         });
       }
 
-      return res.json({
+      return res.status(200).json({
         success: false,
-        message: "Scanning ledger for matching transfer..."
+        message: "Awaiting exact matching transfer amount...",
+        error: "Awaiting exact matching transfer amount..."
       });
     } catch (err: any) {
       console.error("[Server Error] POST /api/verify-transfer failed:", err);

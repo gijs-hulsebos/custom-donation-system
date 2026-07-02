@@ -170,8 +170,6 @@ export default function DonationForm({
       addLog(`Connecting to Solana RPC node (Helius High-Performance Node)...`);
     } else if (priceSource === "jupiter") {
       addLog(`Connecting to Solana RPC node (Jupiter API Assisted Node)...`);
-    } else if (priceSource === "coinbase") {
-      addLog(`Connecting to Solana RPC node (Coinbase Price Assisted Node)...`);
     } else {
       addLog(`Connecting to Solana RPC node (api.mainnet-beta.solana.com)...`);
     }
@@ -342,12 +340,12 @@ export default function DonationForm({
                 <span className="font-bold text-emerald-400">${solPrice.toFixed(2)} USD</span>
               </div>
             </div>
-          ) : (priceSource === "coingecko" || priceSource === "coinbase") ? (
+          ) : priceSource === "coingecko" ? (
             <div className="p-3 bg-emerald-500/5 border border-emerald-500/15 rounded-lg flex flex-col gap-1.5 text-xs font-mono">
               <div className="flex items-center justify-between">
                 <span className="flex items-center gap-1.5 text-slate-400">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                  SOL Price ({priceSource === "coinbase" ? "Coinbase" : "CoinGecko"} Live)
+                  SOL Price (CoinGecko Live)
                 </span>
                 <span className="font-bold text-emerald-400">${solPrice.toFixed(2)} USD</span>
               </div>
