@@ -264,13 +264,11 @@ let cachedSolPrice = 80.15;
         heliusError: heliusError || null,
       });
     } catch (error: any) {
-      console.error("[Prices Endpoint Error]:", error);
-      res.json({
-        SOL: cachedSolPrice,
-        USDC: 1.0,
-        source: "fallback",
-        heliusUsed: false,
-        heliusError: error.message
+      console.error("CRITICAL PRICE FETCH ERROR:", error.message || error);
+      return res.status(500).json({ 
+        success: false, 
+        error: error.message || "Unknown pricing server error",
+        hint: process.env.HELIUS_API_KEY ? "Key is set" : "HELIUS_API_KEY IS MISSING IN VERCEL" 
       });
     }
   });
