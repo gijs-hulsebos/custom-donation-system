@@ -615,6 +615,30 @@ let cachedSolPrice = 80.15;
           });
         }
 
+        let socialsString = "";
+        const s = pending?.socials || req.body.socials;
+        if (s) {
+          if (typeof s === "string") {
+            socialsString = s;
+          } else {
+            const parts = [];
+            if (s.twitter) parts.push(`@${s.twitter.replace("@", "")}`);
+            if (s.discord) parts.push(`Discord: ${s.discord}`);
+            if (s.telegram) parts.push(`TG: @${s.telegram.replace("@", "")}`);
+            socialsString = parts.join(" | ");
+          }
+        }
+
+        recentAlerts.push({
+          id: 'alert-' + Math.random().toString(36).substring(2, 11),
+          name: req.body.name || pending?.name || 'Anonymous',
+          amount: `${req.body.amount || pending?.amount || '0.025'} $${req.body.token || req.body.currency || pending?.currency || 'SOL'}`,
+          message: req.body.message || pending?.message || '',
+          socials: socialsString,
+          timestamp: Date.now()
+        });
+        if (recentAlerts.length > 10) recentAlerts.shift();
+
         res.json({
           success: true,
           message: "Donation successfully verified and settled! Thank you, kind cat-friend! 🐈",
@@ -843,12 +867,26 @@ let cachedSolPrice = 80.15;
         }
 
         // Push successful verify-transfer alerts to the overlay cache
+        let socialsString = "";
+        const s = req.body.socials;
+        if (s) {
+          if (typeof s === "string") {
+            socialsString = s;
+          } else {
+            const parts = [];
+            if (s.twitter) parts.push(`@${s.twitter.replace("@", "")}`);
+            if (s.discord) parts.push(`Discord: ${s.discord}`);
+            if (s.telegram) parts.push(`TG: @${s.telegram.replace("@", "")}`);
+            socialsString = parts.join(" | ");
+          }
+        }
+
         recentAlerts.push({
           id: 'alert-' + Math.random().toString(36).substring(2, 11),
           name: req.body.name || 'Anonymous',
           amount: `${req.body.expectedAmountSol || 0.025} $SOL`,
           message: req.body.message || '',
-          socials: req.body.socials || '',
+          socials: socialsString,
           timestamp: Date.now()
         });
         if (recentAlerts.length > 10) recentAlerts.shift();

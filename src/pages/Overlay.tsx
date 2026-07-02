@@ -11,76 +11,58 @@ interface DonationAlert {
 
 export default function Overlay() {
   const [activeAlert, setActiveAlert] = useState<DonationAlert | null>(null);
-  const [seenIds] = useState<Set<string>>(new Set());
+  const [seenIds] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
-    const checkFeed = async () => {
+    const pollFeed = async () => {
       try {
         const res = await fetch('/api/overlay-feed');
-        if (res.ok) {
-          const feed: DonationAlert[] = await res.json();
-          
-          if (feed && feed.length > 0) {
-            const latest = feed[feed.length - 1];
-            // If we haven't animated this unique alert ID yet
-            if (!seenIds.has(latest.id)) {
-              seenIds.add(latest.id);
-              setActiveAlert(latest);
-              
-              // Keep alert on screen for 7 seconds, then clear it
-              setTimeout(() => {
-                setActiveAlert(null);
-              }, 7000);
-            }
+        const data = await res.json();
+        if (data && data.length > 0) {
+          const latest = data[data.length - 1];
+          if (!seenIds.has(latest.id)) {
+            seenIds.add(latest.id);
+            setActiveAlert(latest);
+            setTimeout(() => setActiveAlert(null), 6000); // Hide after 6s
           }
         }
-      } catch (err) {
-        console.error("Failed to poll overlay feed:", err);
+      } catch (e) {
+        console.error(e);
       }
     };
-
-    // Run immediately and then poll every 3 seconds
-    checkFeed();
-    const interval = setInterval(checkFeed, 3000);
+    const interval = setInterval(pollFeed, 3000);
     return () => clearInterval(interval);
   }, [seenIds]);
 
-  if (!activeAlert) {
-    return <div className="fixed inset-0 w-screen h-screen bg-transparent pointer-events-none" />;
-  }
+  // Crucial: Keep frame 100% transparent and hidden by default
+  if (!activeAlert) return <div className="fixed inset-0 bg-transparent pointer-events-none" />;
 
   return (
-    <div className="w-screen h-screen bg-transparent flex items-start justify-center pt-10 overflow-hidden font-mono select-none">
+    <div className="fixed inset-0 w-screen h-screen bg-transparent flex items-start justify-center pt-20 font-mono select-none pointer-events-none">
       <AnimatePresence>
         {activeAlert && (
           <motion.div
-            initial={{ opacity: 0, y: -50, scale: 0.9 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -20, scale: 0.95 }}
-            transition={{ type: "spring", stiffness: 300, damping: 25 }}
-            className="w-[450px] bg-black/90 border-2 border-green-500 rounded-lg p-6 shadow-[0_0_25px_rgba(34,197,94,0.4)] text-green-400 text-center pointer-events-auto"
+            initial={{ opacity: 0, y: -40 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="w-[400px] bg-black/95 border border-green-500 rounded p-5 text-center shadow-[0_0_20px_rgba(34,197,94,0.3)] text-green-400"
           >
-            {/* Headline Tag */}
-            <div className="text-xs uppercase tracking-widest text-green-500/70 mb-3 animate-pulse">
-              📡 [ Incoming Onchain Transmission ]
+            {/* Line 1: Name - Donation */}
+            <div className="text-lg font-bold text-white tracking-wide">
+              {activeAlert.name} — <span className="text-yellow-400 font-black">{activeAlert.amount}</span>
             </div>
-
-            {/* Name & Amount Row */}
-            <div className="text-xl font-bold text-white tracking-wide">
-              {activeAlert.name} <span className="text-green-500">—</span> <span className="text-yellow-400">{activeAlert.amount}</span>
-            </div>
-
-            {/* Custom Message Body */}
+            
+            {/* Line 2: Message */}
             {activeAlert.message && (
-              <div className="mt-3 text-base text-gray-200 border-t border-b border-green-900/50 py-2 italic font-sans">
-                "{activeAlert.message}"
+              <div className="mt-2 text-sm text-gray-300 italic border-t border-b border-green-900/30 py-2">
+                {activeAlert.message}
               </div>
             )}
-
-            {/* Social Links Sub-layer */}
+            
+            {/* Line 3: Social Link */}
             {activeAlert.socials && (
-              <div className="mt-3 text-sm text-blue-400 font-sans font-medium flex items-center justify-center gap-1">
-                <span>{activeAlert.socials}</span>
+              <div className="mt-2 text-xs text-blue-400 tracking-wider">
+                {activeAlert.socials}
               </div>
             )}
           </motion.div>
