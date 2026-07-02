@@ -1,6 +1,5 @@
 import express from "express";
 import path from "path";
-import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { PublicKey, Connection } from "@solana/web3.js";
@@ -9,9 +8,6 @@ import bs58 from "bs58";
 
 // Load environment variables
 dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Fallback configuration values
 const DEFAULT_RECEIVER_WALLET = "AJCS2c4HqcfWbEU2R75iWkPFUk5WwjwbuPNA26o6CuMA"; // The NFT Cat donation fallback
