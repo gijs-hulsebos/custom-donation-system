@@ -564,7 +564,7 @@ app.use(express.json());
   // Manual payment verification route checking the Solana ledger via RPC with deterministic balance changes
   app.post("/api/verify-transfer", async (req, res) => {
     try {
-      const { expectedAmountSol, checkoutTimestamp, name, socials, message, simulate } = req.body;
+      const { expectedAmountSol, checkoutTimestamp, name, socials, message } = req.body;
 
       if (!expectedAmountSol || !checkoutTimestamp) {
         return res.status(400).json({ error: "expectedAmountSol and checkoutTimestamp are required parameters." });
@@ -572,13 +572,10 @@ app.use(express.json());
 
       console.log(`[RPC Monitor] Scanning txs after timestamp: ${checkoutTimestamp}`);
 
-      let verified = false;
-      let txId = "";
+      const apiKey = process.env.HELIUS_API_KEY || "";
+      const rpcUrl = apiKey ? `https://mainnet.helius-rpc.com/?api-key=${apiKey}` : "https://api.mainnet-beta.solana.com";
 
-      const apiKey = process.env.HELIUS_API_KEY;
-      const rpcUrl = process.env.SOLANA_RPC_URL || 
-        (apiKey ? `https://mainnet.helius-rpc.com/?api-key=${apiKey}` : "https://api.mainnet-beta.solana.com");
-
+      let signatures: any[] = [];
       try {
         const signaturesRes = await fetch(rpcUrl, {
           method: "POST",
@@ -588,9 +585,9 @@ app.use(express.json());
             id: "get-signatures",
             method: "getSignaturesForAddress",
             params: [
-              RECEIVER_WALLET,
+              "AJCS2c4HqcfWbEU2R75iWkPFUk5WwjwbuPNA26o6CuMA",
               {
-                limit: 20,
+                limit: 10,
                 commitment: "confirmed"
               }
             ]
@@ -599,101 +596,104 @@ app.use(express.json());
 
         if (signaturesRes.ok) {
           const sigsResult: any = await signaturesRes.json();
-          const signatures = sigsResult.result || [];
-          console.log(`[RPC Monitor] Retrieved ${signatures.length} recent signatures from RPC.`);
-
-          // Filter returned signatures array instantly:
-          // only look at transactions where the block time (blockTime) is greater than or equal to our checkoutTimestamp 
-          // (with a small 30-second buffer to handle network clock drift).
-          const validSignatures = signatures.filter((sig: any) => {
-            return sig.blockTime && (sig.blockTime >= (Number(checkoutTimestamp) - 30));
-          });
-
-          console.log(`[RPC Monitor] Found ${validSignatures.length} signatures in the valid time window.`);
-
-          for (const sigInfo of validSignatures) {
-            // Idempotency check:
-            if (usedSignatures.has(sigInfo.signature)) {
-              console.log(`[RPC Monitor] Skipping signature ${sigInfo.signature} because it has already been verified/used.`);
-              continue;
-            }
-
-            // Pull the full transaction detail using getTransaction with jsonParsed encoding
-            try {
-              const txRes = await fetch(rpcUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  jsonrpc: "2.0",
-                  id: "get-tx-parsed",
-                  method: "getTransaction",
-                  params: [
-                    sigInfo.signature,
-                    {
-                      encoding: "jsonParsed",
-                      maxSupportedTransactionVersion: 0,
-                      commitment: "confirmed"
-                    }
-                  ]
-                })
-              });
-
-              if (txRes.ok) {
-                const txData: any = await txRes.json();
-                const tx = txData.result;
-
-                if (tx && tx.meta && tx.meta.err === null) {
-                  // Find RECEIVER_WALLET account index in message.accountKeys
-                  const accountKeys = tx.transaction.message.accountKeys;
-                  let receiverIndex = -1;
-
-                  for (let i = 0; i < accountKeys.length; i++) {
-                    const keyObj = accountKeys[i];
-                    const pubkey = typeof keyObj === "string" ? keyObj : keyObj.pubkey;
-                    if (pubkey === RECEIVER_WALLET) {
-                      receiverIndex = i;
-                      break;
-                    }
-                  }
-
-                  if (receiverIndex !== -1 && tx.meta.postBalances && tx.meta.preBalances) {
-                    const postBalance = tx.meta.postBalances[receiverIndex];
-                    const preBalance = tx.meta.preBalances[receiverIndex];
-                    const netIncrease = postBalance - preBalance;
-
-                    // Convert expectedAmountSol to Lamports
-                    const expectedLamports = Math.round(Number(expectedAmountSol) * 1_000_000_000);
-
-                    if (netIncrease === expectedLamports) {
-                      console.log(`[RPC Monitor] Found match! Tx Signature: ${tx.transaction.signatures[0]}`);
-                      
-                      // Save signature to usedSignatures for idempotency
-                      usedSignatures.add(sigInfo.signature);
-
-                      verified = true;
-                      txId = sigInfo.signature;
-                      break;
-                    }
-                  }
-                }
-              }
-            } catch (txErr: any) {
-              console.error(`[RPC Monitor] Error fetching/parsing transaction ${sigInfo.signature}:`, txErr.message || txErr);
-            }
-          }
+          signatures = sigsResult.result || [];
         }
       } catch (rpcErr: any) {
         console.warn(`[RPC Monitor] RPC ledger lookup failed or rate-limited: ${rpcErr.message || rpcErr}`);
       }
 
-      // Simulator fallback for development or local playground testing (if requested/enabled)
-      if (!verified && (simulate || process.env.NODE_ENV !== "production" || !process.env.SOLANA_RPC_URL)) {
-        console.log(`[RPC Monitor Simulator] Simulating blockchain match for expectedAmountSol: ${expectedAmountSol}`);
-        verified = true;
-        txId = "sim_tx_" + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+      console.log(`[RPC Monitor] Retrieved ${signatures.length} recent signatures from RPC.`);
+
+      // Filter returned signatures array instantly:
+      // only look at transactions where the block time (blockTime) is greater than or equal to our checkoutTimestamp - 10
+      const validSignatures = signatures.filter((sig: any) => {
+        return sig.blockTime && (sig.blockTime >= (Number(checkoutTimestamp) - 10));
+      });
+
+      console.log(`[RPC Monitor] Found ${validSignatures.length} signatures in the valid time window.`);
+
+      if (validSignatures.length === 0) {
+        return res.status(200).json({
+          success: false,
+          message: "No recent transactions found on-chain.",
+          error: "No recent transactions found on-chain."
+        });
       }
 
-      if (verified) {
+      let verifiedSignature = "";
+
+      for (const sigInfo of validSignatures) {
+        const signature = sigInfo.signature;
+
+        // Idempotency check:
+        if (usedSignatures.has(signature)) {
+          console.log(`[RPC Monitor] Skipping signature ${signature} because it has already been verified/used.`);
+          continue;
+        }
+
+        // Pull the full transaction detail using getTransaction with jsonParsed encoding
+        try {
+          const txRes = await fetch(rpcUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: "get-tx-parsed",
+              method: "getTransaction",
+              params: [
+                signature,
+                {
+                  encoding: "jsonParsed",
+                  maxSupportedTransactionVersion: 0,
+                  commitment: "confirmed"
+                }
+              ]
+            })
+          });
+
+          if (txRes.ok) {
+            const txData: any = await txRes.json();
+            const tx = txData.result;
+
+            if (tx && tx.meta && tx.meta.err === null) {
+              // Locate the account index of our destination wallet inside result.transaction.message.accountKeys
+              const accountKeys = tx.transaction.message.accountKeys;
+              let receiverIndex = -1;
+
+              for (let i = 0; i < accountKeys.length; i++) {
+                const keyObj = accountKeys[i];
+                const pubkey = typeof keyObj === "string" ? keyObj : keyObj.pubkey;
+                if (pubkey === "AJCS2c4HqcfWbEU2R75iWkPFUk5WwjwbuPNA26o6CuMA") {
+                  receiverIndex = i;
+                  break;
+                }
+              }
+
+              if (receiverIndex !== -1 && tx.meta.postBalances && tx.meta.preBalances) {
+                const postBalance = tx.meta.postBalances[receiverIndex];
+                const preBalance = tx.meta.preBalances[receiverIndex];
+                const actualLamportsReceived = postBalance - preBalance;
+
+                // Convert our expected SOL to Lamports
+                const expectedLamports = Math.round(Number(expectedAmountSol) * 1_000_000_000);
+
+                if (actualLamportsReceived === expectedLamports) {
+                  console.log(`[RPC Monitor] Found match! Tx Signature: ${tx.transaction.signatures[0]}`);
+
+                  // Save signature to usedSignatures for idempotency
+                  usedSignatures.add(signature);
+                  verifiedSignature = signature;
+                  break;
+                }
+              }
+            }
+          }
+        } catch (txErr: any) {
+          console.error(`[RPC Monitor] Error fetching/parsing transaction ${signature}:`, txErr.message || txErr);
+        }
+      }
+
+      if (verifiedSignature) {
         // Trigger Discord Notification if webhook is configured
         if (DISCORD_WEBHOOK_URL) {
           try {
@@ -737,7 +737,7 @@ app.use(express.json());
                     },
                     {
                       name: "🧾 Transaction Signature",
-                      value: `\`${txId}\``,
+                      value: `\`${verifiedSignature}\``,
                       inline: false,
                     },
                   ],
@@ -759,15 +759,18 @@ app.use(express.json());
           }
         }
 
-        return res.json({
+        return res.status(200).json({
           success: true,
-          message: "Manual transfer successfully auto-detected on-chain!",
-          txId,
+          txHash: verifiedSignature,
+          txId: verifiedSignature,
+          message: "Manual transfer successfully auto-detected on-chain!"
         });
       }
 
-      return res.status(404).json({
-        error: "No matching transaction matching your amount has been spotted in the ledger history yet.",
+      return res.status(200).json({
+        success: false,
+        message: "Awaiting exact matching transfer amount...",
+        error: "Awaiting exact matching transfer amount..."
       });
     } catch (err: any) {
       console.error("[Server Error] POST /api/verify-transfer failed:", err);
