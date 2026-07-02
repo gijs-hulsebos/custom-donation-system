@@ -86,14 +86,18 @@ setInterval(() => {
 const app = express();
 app.use(express.json());
 
+// Dynamic pricing cache to guarantee that fallback states never drop back to stale hardcoded 140.0
+let cachedSolPrice = 80.15;
+
 // --- API ROUTES ---
 
-  // Live prices endpoint supporting Helius, Jupiter, and CoinGecko with detailed error logging
+  // Live prices endpoint supporting Helius, Coinbase, Jupiter, and CoinGecko with detailed error logging
   app.get("/api/prices", async (req, res) => {
     try {
-      let solPrice = 140.0;
+      let solPrice = cachedSolPrice;
       let usdcPrice = 1.0;
       let usedHelius = false;
+      let usedCoinbase = false;
       let usedJupiter = false;
       let usedCoinGecko = false;
       let heliusError = "";
@@ -149,8 +153,9 @@ app.use(express.json());
               console.error(`[Helius RPC Error Details]:`, result.error);
             } else {
               const pricePerToken = result.result?.token_info?.price_info?.price_per_token;
-              if (pricePerToken && typeof pricePerToken === "number") {
+              if (pricePerToken && typeof pricePerToken === "number" && pricePerToken > 0) {
                 solPrice = pricePerToken;
+                cachedSolPrice = pricePerToken;
                 usedHelius = true;
                 heliusError = ""; // Clear any errors since it worked perfectly
                 console.log(`[Helius RPC Success] Live SOL price: $${solPrice}`);
@@ -169,33 +174,33 @@ app.use(express.json());
         }
       }
 
-      // Fallback 1: Query Jupiter Price API v2 (extremely stable, no API key needed, free from rate-limiting)
+      // Fallback 1: Query Coinbase Spot Price API (extremely stable, no API key needed, never rate-limits Cloud Run, resolves instantly)
       if (!usedHelius) {
         try {
-          console.log("[Prices Fallback] Querying Jupiter Price API v2...");
-          const response = await fetch("https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112,SOL");
+          console.log("[Prices Fallback] Querying Coinbase Spot Price API...");
+          const response = await fetch("https://api.coinbase.com/v2/prices/SOL-USD/spot");
           if (response.ok) {
-            const jupData: any = await response.json();
-            const priceObj = jupData.data?.["So11111111111111111111111111111111111111112"] || jupData.data?.["SOL"];
-            const priceStr = priceObj?.price;
+            const cbData: any = await response.json();
+            const priceStr = cbData.data?.amount;
             if (priceStr) {
               const price = parseFloat(priceStr);
               if (!isNaN(price) && price > 0) {
                 solPrice = price;
-                usedJupiter = true;
-                console.log(`[Jupiter Price API Success] Live SOL price: $${solPrice}`);
+                cachedSolPrice = price;
+                usedCoinbase = true;
+                console.log(`[Coinbase Price API Success] Live SOL price: $${solPrice}`);
               }
             }
           } else {
-            console.warn(`[Jupiter Price API Fallback] HTTP error: ${response.status}`);
+            console.warn(`[Coinbase Price API Fallback] HTTP error: ${response.status}`);
           }
         } catch (err: any) {
-          console.error("[Jupiter Price API Fetch Error]:", err);
+          console.error("[Coinbase Price API Fetch Error]:", err);
         }
       }
 
       // Fallback 2: Query CoinGecko Price API
-      if (!usedHelius && !usedJupiter) {
+      if (!usedHelius && !usedCoinbase) {
         try {
           console.log("[Prices Fallback] Querying CoinGecko Simple Price API...");
           const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd");
@@ -204,6 +209,7 @@ app.use(express.json());
             const price = cgData.solana?.usd;
             if (price && typeof price === "number") {
               solPrice = price;
+              cachedSolPrice = price;
               usedCoinGecko = true;
               console.log(`[CoinGecko Price Fallback] Live SOL price: $${solPrice}`);
             } else {
@@ -217,11 +223,38 @@ app.use(express.json());
         }
       }
 
+      // Fallback 3: Query Jupiter Price API v2 (extremely stable, no API key needed, free from rate-limiting)
+      if (!usedHelius && !usedCoinbase && !usedCoinGecko) {
+        try {
+          console.log("[Prices Fallback] Querying Jupiter Price API v2...");
+          const response = await fetch("https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112,SOL");
+          if (response.ok) {
+            const jupData: any = await response.json();
+            const priceObj = jupData.data?.["So11111111111111111111111111111111111111112"] || jupData.data?.["SOL"];
+            const priceStr = priceObj?.price;
+            if (priceStr) {
+              const price = parseFloat(priceStr);
+              if (!isNaN(price) && price > 0) {
+                solPrice = price;
+                cachedSolPrice = price;
+                usedJupiter = true;
+                console.log(`[Jupiter Price API Success] Live SOL price: $${solPrice}`);
+              }
+            }
+          } else {
+            console.warn(`[Jupiter Price API Fallback] HTTP error: ${response.status}`);
+          }
+        } catch (err: any) {
+          console.error("[Jupiter Price API Fetch Error]:", err);
+        }
+      }
+
       // Resolve the active source
       let source = "fallback";
       if (usedHelius) source = "helius";
-      else if (usedJupiter) source = "jupiter";
+      else if (usedCoinbase) source = "coinbase";
       else if (usedCoinGecko) source = "coingecko";
+      else if (usedJupiter) source = "jupiter";
 
       res.json({
         SOL: solPrice,
@@ -232,7 +265,13 @@ app.use(express.json());
       });
     } catch (error: any) {
       console.error("[Prices Endpoint Error]:", error);
-      res.json({ SOL: 140.0, USDC: 1.0, source: "fallback", heliusUsed: false, heliusError: error.message });
+      res.json({
+        SOL: cachedSolPrice,
+        USDC: 1.0,
+        source: "fallback",
+        heliusUsed: false,
+        heliusError: error.message
+      });
     }
   });
 
