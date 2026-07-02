@@ -1,7 +1,6 @@
 import express from "express";
 import path from "path";
 import dotenv from "dotenv";
-import { PublicKey, Connection } from "@solana/web3.js";
 import nacl from "tweetnacl";
 import bs58 from "bs58";
 
@@ -321,7 +320,10 @@ app.use(express.json());
 
       // Validate public key format
       try {
-        new PublicKey(donorWallet);
+        const decoded = bs58.decode(donorWallet);
+        if (decoded.length !== 32) {
+          throw new Error("Invalid public key length");
+        }
       } catch (e) {
         res.status(400).json({ error: "Invalid Solana donor wallet address." });
         return;
@@ -411,7 +413,7 @@ app.use(express.json());
       if (!verified) {
         console.log("[PayAI Fallback] Performing cryptographic verification on-chain fallback...");
         try {
-          const donorPubKey = new PublicKey(donorWallet);
+          const donorPubKeyBytes = bs58.decode(donorWallet);
           const signatureBuffer = bs58.decode(signature);
           const messageBuffer = new TextEncoder().encode(pending.messageToSign);
 
@@ -419,7 +421,7 @@ app.use(express.json());
           const isSignatureValid = nacl.sign.detached.verify(
             messageBuffer,
             signatureBuffer,
-            donorPubKey.toBytes()
+            donorPubKeyBytes
           );
 
           if (isSignatureValid) {
@@ -565,43 +567,79 @@ app.use(express.json());
       let verified = false;
       let txId = "";
 
-      // A. Real Solana ledger scan using @solana/web3.js Connection
+      // A. Real Solana ledger scan using native fetch JSON-RPC
       try {
         const apiKey = process.env.HELIUS_API_KEY;
         const rpcUrl = process.env.SOLANA_RPC_URL || 
           (apiKey ? `https://mainnet.helius-rpc.com/?api-key=${apiKey}` : "https://api.mainnet-beta.solana.com");
-        const connection = new Connection(rpcUrl, "confirmed");
-        const pubKey = new PublicKey(RECEIVER_WALLET);
 
-        const signatures = await connection.getSignaturesForAddress(pubKey, { limit: 15 });
-        console.log(`[Ledger Monitor] Retrieved ${signatures.length} recent signatures from RPC.`);
-
-        for (const sigInfo of signatures) {
-          // Check if the memo field in signature info contains our tracking memo
-          if (sigInfo.memo && sigInfo.memo.includes(memo)) {
-            console.log(`[Ledger Monitor] Match found in signature memo! ${sigInfo.signature}`);
-            verified = true;
-            txId = sigInfo.signature;
-            break;
-          }
-
-          // Alternatively, retrieve the transaction logs to search for the tracking memo
-          try {
-            const tx = await connection.getTransaction(sigInfo.signature, {
-              maxSupportedTransactionVersion: 0,
-              commitment: "confirmed"
-            });
-            if (tx && tx.meta && tx.meta.logMessages) {
-              const logsString = tx.meta.logMessages.join("\n");
-              if (logsString.includes(memo)) {
-                console.log(`[Ledger Monitor] Match found in transaction logs! ${sigInfo.signature}`);
-                verified = true;
-                txId = sigInfo.signature;
-                break;
+        const signaturesRes = await fetch(rpcUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: "get-signatures",
+            method: "getSignaturesForAddress",
+            params: [
+              RECEIVER_WALLET,
+              {
+                limit: 15,
+                commitment: "confirmed"
               }
+            ]
+          })
+        });
+
+        if (signaturesRes.ok) {
+          const sigsResult: any = await signaturesRes.ok ? await signaturesRes.json() : {};
+          const signatures = sigsResult.result || [];
+          console.log(`[Ledger Monitor] Retrieved ${signatures.length} recent signatures from RPC.`);
+
+          for (const sigInfo of signatures) {
+            // Check if the memo field in signature info contains our tracking memo
+            if (sigInfo.memo && sigInfo.memo.includes(memo)) {
+              console.log(`[Ledger Monitor] Match found in signature memo! ${sigInfo.signature}`);
+              verified = true;
+              txId = sigInfo.signature;
+              break;
             }
-          } catch (txErr) {
-            // Silently continue for un-retrievable transactions
+
+            // Alternatively, retrieve the transaction logs to search for the tracking memo
+            try {
+              const txRes = await fetch(rpcUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: "get-tx",
+                  method: "getTransaction",
+                  params: [
+                    sigInfo.signature,
+                    {
+                      encoding: "json",
+                      maxSupportedTransactionVersion: 0,
+                      commitment: "confirmed"
+                    }
+                  ]
+                })
+              });
+
+              if (txRes.ok) {
+                const txData: any = await txRes.json();
+                const tx = txData.result;
+                if (tx && tx.meta && tx.meta.logMessages) {
+                  const logsString = tx.meta.logMessages.join("\n");
+                  if (logsString.includes(memo)) {
+                    console.log(`[Ledger Monitor] Match found in transaction logs! ${sigInfo.signature}`);
+                    verified = true;
+                    txId = sigInfo.signature;
+                    break;
+                  }
+                }
+              }
+            } catch (txErr) {
+              // Silently continue for un-retrievable transactions
+            }
           }
         }
       } catch (rpcErr: any) {
