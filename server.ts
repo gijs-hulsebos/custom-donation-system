@@ -18,6 +18,7 @@ function generateRandomId(length = 12): string {
 const DEFAULT_RECEIVER_WALLET = "AJCS2c4HqcfWbEU2R75iWkPFUk5WwjwbuPNA26o6CuMA"; // The NFT Cat donation fallback
 const RECEIVER_WALLET = process.env.RECEIVER_WALLET || DEFAULT_RECEIVER_WALLET;
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || "";
+const GOOGLE_SHEETS_WEBHOOK_URL = process.env.GOOGLE_SHEETS_WEBHOOK_URL || "";
 const PORT = 3000;
 
 // In-memory store for pending payments (mapped by paymentId)
@@ -545,6 +546,27 @@ app.use(express.json());
           });
         }
 
+        // Asynchronously log to Google Sheets if configured
+        if (GOOGLE_SHEETS_WEBHOOK_URL) {
+          try {
+            const googleSheetsPayload = {
+              amount: `${pending.amount} $${pending.currency}`,
+              wallet: pending.donorWallet,
+              tx: settlementResult.txId || ""
+            };
+
+            // Non-blocking fetch call with Content-Type: text/plain to avoid CORS preflight rejection
+            await fetch(GOOGLE_SHEETS_WEBHOOK_URL, {
+              method: "POST",
+              headers: { "Content-Type": "text/plain" },
+              body: JSON.stringify(googleSheetsPayload),
+            });
+            console.log("[Google Sheets] Donation logged successfully!");
+          } catch (sheetErr) {
+            console.error("[Google Sheets] Webhook logging failed:", sheetErr);
+          }
+        }
+
         res.json({
           success: true,
           message: "Donation successfully verified and settled! Thank you, kind cat-friend! 🐈",
@@ -621,6 +643,7 @@ app.use(express.json());
       }
 
       let verifiedSignature = "";
+      let donorWalletFromTx = "Unknown";
 
       for (const sigInfo of validSignatures) {
         const signature = sigInfo.signature;
@@ -679,6 +702,12 @@ app.use(express.json());
 
                 if (actualLamportsReceived === expectedLamports) {
                   console.log(`[RPC Monitor] Found match! Tx Signature: ${tx.transaction.signatures[0]}`);
+
+                  // Extract donor wallet (typically the fee payer / first account key)
+                  if (accountKeys && accountKeys.length > 0) {
+                    const keyObj = accountKeys[0];
+                    donorWalletFromTx = typeof keyObj === "string" ? keyObj : keyObj.pubkey || "Unknown";
+                  }
 
                   // Save signature to usedSignatures for idempotency
                   usedSignatures.add(signature);
@@ -756,6 +785,27 @@ app.use(express.json());
             });
           } catch (webhookErr) {
             console.error("[Discord webhook manual verify error]:", webhookErr);
+          }
+        }
+
+        // Asynchronously log to Google Sheets if configured
+        if (GOOGLE_SHEETS_WEBHOOK_URL) {
+          try {
+            const googleSheetsPayload = {
+              amount: `${expectedAmountSol} $SOL`,
+              wallet: donorWalletFromTx,
+              tx: verifiedSignature
+            };
+
+            // Non-blocking fetch call with Content-Type: text/plain to avoid CORS preflight rejection
+            await fetch(GOOGLE_SHEETS_WEBHOOK_URL, {
+              method: "POST",
+              headers: { "Content-Type": "text/plain" },
+              body: JSON.stringify(googleSheetsPayload),
+            });
+            console.log("[Google Sheets] Manual donation logged successfully!");
+          } catch (sheetErr) {
+            console.error("[Google Sheets] Webhook logging failed:", sheetErr);
           }
         }
 

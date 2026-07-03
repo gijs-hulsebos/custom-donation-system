@@ -18,6 +18,7 @@ import bs58 from "bs58";
 
 const RECEIVER_WALLET = process.env.NEXT_PUBLIC_RECEIVER_WALLET || "AJCS2c4HqcfWbEU2R75iWkPFUk5WwjwbuPNA26o6CuMA";
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
+const GOOGLE_SHEETS_WEBHOOK_URL = process.env.GOOGLE_SHEETS_WEBHOOK_URL;
 const PAYAI_CONFIG = process.env.PAYAI_CONFIG;
 
 // In-memory caching for active payments (Next.js serverless warning: In serverless environments,
@@ -277,6 +278,27 @@ export async function POST(request: Request) {
           });
         } catch (webhookErr) {
           console.error("Failed to post Discord webhook notice:", webhookErr);
+        }
+      }
+
+      // Asynchronously log to Google Sheets if configured
+      if (GOOGLE_SHEETS_WEBHOOK_URL) {
+        try {
+          const googleSheetsPayload = {
+            amount: `${pending.amount} $${pending.currency}`,
+            wallet: pending.donorWallet,
+            tx: settlementResult.txId || ""
+          };
+
+          // Non-blocking fetch call with Content-Type: text/plain to avoid CORS preflight rejection
+          await fetch(GOOGLE_SHEETS_WEBHOOK_URL, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain" },
+            body: JSON.stringify(googleSheetsPayload),
+          });
+          console.log("[Google Sheets] Donation logged successfully!");
+        } catch (sheetErr) {
+          console.error("[Google Sheets] Webhook logging failed:", sheetErr);
         }
       }
 
