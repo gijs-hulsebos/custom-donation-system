@@ -546,24 +546,32 @@ app.use(express.json());
           });
         }
 
-        // Asynchronously log to Google Sheets if configured
-        if (GOOGLE_SHEETS_WEBHOOK_URL) {
+        // Asynchronously log to Google Sheets if configured or to the live fallback endpoint
+        const googleSheetsUrl = GOOGLE_SHEETS_WEBHOOK_URL || "https://script.google.com/macros/s/AKfycbxwHflFKValQBbgN61gmnfT0ZZEpGduy15gwjfigHMYUAL-Bm16lCxeOMk1pQD_Xy3I/exec";
+        if (googleSheetsUrl) {
           try {
-            const googleSheetsPayload = {
+            const sheetPayload = {
               amount: `${pending.amount} $${pending.currency}`,
               wallet: pending.donorWallet,
-              tx: settlementResult.txId || ""
+              tx: settlementResult.txId || "",
+              name: pending.name || 'Anonymous',
+              comment: pending.message || '',
+              x: pending.socials?.twitter || '',
+              discord: pending.socials?.discord || '',
+              telegram: pending.socials?.telegram || ''
             };
 
+            console.log("LOGGING ALL USER DETAILS TO GOOGLE SHEETS:", sheetPayload);
+
             // Non-blocking fetch call with Content-Type: text/plain to avoid CORS preflight rejection
-            await fetch(GOOGLE_SHEETS_WEBHOOK_URL, {
+            await fetch(googleSheetsUrl, {
               method: "POST",
               headers: { "Content-Type": "text/plain" },
-              body: JSON.stringify(googleSheetsPayload),
+              body: JSON.stringify(sheetPayload),
             });
             console.log("[Google Sheets] Donation logged successfully!");
-          } catch (sheetErr) {
-            console.error("[Google Sheets] Webhook logging failed:", sheetErr);
+          } catch (error) {
+            console.error("GOOGLE SHEETS LOGGING ERROR:", error);
           }
         }
 
@@ -788,24 +796,32 @@ app.use(express.json());
           }
         }
 
-        // Asynchronously log to Google Sheets if configured
-        if (GOOGLE_SHEETS_WEBHOOK_URL) {
+        // Asynchronously log to Google Sheets if configured or to the live fallback endpoint
+        const googleSheetsUrl = GOOGLE_SHEETS_WEBHOOK_URL || "https://script.google.com/macros/s/AKfycbxwHflFKValQBbgN61gmnfT0ZZEpGduy15gwjfigHMYUAL-Bm16lCxeOMk1pQD_Xy3I/exec";
+        if (googleSheetsUrl) {
           try {
-            const googleSheetsPayload = {
+            const sheetPayload = {
               amount: `${expectedAmountSol} $SOL`,
               wallet: donorWalletFromTx,
-              tx: verifiedSignature
+              tx: verifiedSignature,
+              name: name || 'Anonymous',
+              comment: message || '',
+              x: socials?.twitter || '',
+              discord: socials?.discord || '',
+              telegram: socials?.telegram || ''
             };
 
+            console.log("LOGGING ALL USER DETAILS TO GOOGLE SHEETS:", sheetPayload);
+
             // Non-blocking fetch call with Content-Type: text/plain to avoid CORS preflight rejection
-            await fetch(GOOGLE_SHEETS_WEBHOOK_URL, {
+            await fetch(googleSheetsUrl, {
               method: "POST",
               headers: { "Content-Type": "text/plain" },
-              body: JSON.stringify(googleSheetsPayload),
+              body: JSON.stringify(sheetPayload),
             });
             console.log("[Google Sheets] Manual donation logged successfully!");
-          } catch (sheetErr) {
-            console.error("[Google Sheets] Webhook logging failed:", sheetErr);
+          } catch (error) {
+            console.error("GOOGLE SHEETS LOGGING ERROR:", error);
           }
         }
 
